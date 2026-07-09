@@ -392,6 +392,21 @@ def load_company_df(company):
         df = df.iloc[2:].reset_index(drop=True)
     return df
 
+@st.cache_data
+def load_all_companies_df():
+    """40개 기업의 과거 3개년 데이터를 하나로 합친 480행 데이터 (의사결정나무 학습용).
+    한 기업의 12행만으로는 나무가 우연 상관(예: ESG 평판)에 과적합되므로,
+    위기 등급 규칙을 제대로 역산하려면 이 통합 데이터로 학습해야 한다."""
+    frames = []
+    for comp in company_pool:
+        df = load_company_df(comp)
+        if df is None:
+            continue
+        df = df.copy()
+        df.insert(0, '기업명', comp)
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
 def _coerce_number(value):
     """CSV에서 문자열로 읽힌 숫자를 엑셀에 숫자 셀로 넣기 위한 변환"""
     if isinstance(value, (int, float)):
@@ -405,13 +420,20 @@ def _coerce_number(value):
         except ValueError:
             return value
 
-def _add_orange3_sheet(wb, sheet_name, df):
+# 여러 기업을 합친 시트에서는 글자 열의 종류가 16개를 넘어 Orange3 Tree의
+# exhaustive binarization 한도에 걸리므로, 해당 열을 meta(참고 정보)로 강등한다.
+TEXT_META_OVERRIDES = {'주요 타겟층': 'meta', '주력 판매 제품': 'meta', '주요 판매 채널': 'meta'}
+
+def _add_orange3_sheet(wb, sheet_name, df, role_overrides=None):
     """워크북에 Orange3 3줄 헤더(컬럼명/자료형/역할)가 붙은 시트를 추가하고 서식 적용"""
+    roles = dict(ORANGE3_ROLES)
+    if role_overrides:
+        roles.update(role_overrides)
     ws = wb.create_sheet(sheet_name)
     cols = list(df.columns)
     ws.append(cols)
     ws.append([ORANGE3_TYPES.get(c, "string") for c in cols])
-    ws.append([ORANGE3_ROLES.get(c, "") for c in cols])
+    ws.append([roles.get(c, "") for c in cols])
     for row in df.itertuples(index=False):
         ws.append([_coerce_number(v) for v in row])
 
@@ -428,11 +450,11 @@ def _add_orange3_sheet(wb, sheet_name, df):
         ws.column_dimensions[get_column_letter(i)].width = min(max(len(str(c)) * 1.8, 11), 30)
 
 def build_excel(sheets):
-    """(시트이름, 데이터프레임) 목록을 하나의 xlsx 파일(bytes)로 묶음"""
+    """(시트이름, 데이터프레임[, 역할 오버라이드]) 목록을 하나의 xlsx 파일(bytes)로 묶음"""
     wb = Workbook()
     wb.remove(wb.active)
-    for name, df in sheets:
-        _add_orange3_sheet(wb, name, df)
+    for item in sheets:
+        _add_orange3_sheet(wb, item[0], item[1], item[2] if len(item) > 2 else None)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -580,7 +602,8 @@ def get_simulation_result_rows(company):
 @st.cache_data(show_spinner=False)
 def build_company_excel(company, quarter):
     """조별 기업의 모든 분석 데이터를 시트별로 담은 통합 엑셀 파일 생성.
-    시트: ①과거 3개년 데이터 ②월별 실적 보고서 ③시뮬레이션 결과 ④전체 시장 (진행 상황에 따라 2~4개)
+    시트: ①과거 3개년 데이터 ②월별 실적 보고서 ③시뮬레이션 결과 ④전체 시장
+    ⑤전체기업 3개년(480행, 의사결정나무 학습용) — 진행 상황에 따라 3~5개
     quarter는 캐시 키 용도: 데이터는 분기가 진행될 때만 바뀌므로, 그 외의 화면 갱신에서는
     엑셀을 다시 만들지 않고 재사용한다 (매 클릭마다 통짜 재생성되던 병목 제거)."""
     sheets = [("과거3개년데이터", load_company_df(company))]
@@ -590,13 +613,14 @@ def build_company_excel(company, quarter):
     sim_rows = get_simulation_result_rows(company)
     if sim_rows:
         sheets.append(("시뮬레이션결과", pd.DataFrame(sim_rows)))
-    sheets.append(("전체시장", pd.DataFrame(get_market_rows())))
+    sheets.append(("전체시장", pd.DataFrame(get_market_rows()), TEXT_META_OVERRIDES))
+    sheets.append(("전체기업3개년", load_all_companies_df(), TEXT_META_OVERRIDES))
     return build_excel(sheets)
 
 @st.cache_data(show_spinner=False)
 def build_market_excel(quarter):
     """전체 시장 통합 엑셀 (quarter는 캐시 키 - 분기 진행 시에만 재생성)"""
-    return build_excel([("전체시장", pd.DataFrame(get_market_rows()))])
+    return build_excel([("전체시장", pd.DataFrame(get_market_rows()), TEXT_META_OVERRIDES)])
 
 def get_financial_text_for_ai(company):
     """AI 평가에 넣을 최신 재무 상태 텍스트 (진행된 분기가 있으면 마케팅이 반영된 최신 실적 기준)"""
@@ -941,6 +965,7 @@ if view_mode == "📚 분석 가이드 (Orange3 사용법)":
         ("🗓️", "월별실적보고서", "내 마케팅 성과가<br>매달 기록됨", "#74C0FC"),
         ("🎯", "시뮬레이션결과", "전략 → 주가 변화<br>복기용", "#B197FC"),
         ("🌐", "전체시장", "40개 기업 비교<br>그룹 나누기용", "#69DB7C"),
+        ("🌳", "전체기업3개년", "40개 기업 × 3년<br>의사결정나무용", "#38D9A9"),
     ]), unsafe_allow_html=True)
     st.caption("⚠️ 엑셀의 2~3번째 줄은 Orange3 설정값이에요. 지우면 안 돼요!")
 
@@ -997,22 +1022,27 @@ if view_mode == "📚 분석 가이드 (Orange3 사용법)":
 
     with st.expander("🌳 STEP 3. 규칙 배우기 (Model) - 의사결정나무"):
         st.markdown(orange3_flow([
-            ("📁", "File", "#FFA94D"), ("🌳", "Tree", "#69DB7C"), ("🔍", "Tree Viewer", "#38D9A9"),
+            ("📁", "File (전체기업3개년)", "#FFA94D"), ("🌳", "Tree", "#69DB7C"), ("🔍", "Tree Viewer", "#38D9A9"),
         ]), unsafe_allow_html=True)
         st.markdown(info_cards([
-            ("①", "Tree 연결", "File → Tree<br>선으로 잇기", "#69DB7C"),
-            ("②", "Viewer 열기", "Tree → Tree Viewer<br>나무 그림 등장!", "#69DB7C"),
-            ("③", "갈림길 읽기", "예: 재고율 > 30<br>→ '위험' 가지로", "#69DB7C"),
+            ("①", "새 File 꺼내기", "시트는 꼭<br><b>전체기업3개년</b>!", "#69DB7C"),
+            ("②", "Tree 연결", "File → Tree →<br>Tree Viewer 잇기", "#69DB7C"),
+            ("③", "갈림길 읽기", "예: 이탈률 > 15<br>→ 위기 가지로", "#69DB7C"),
         ]), unsafe_allow_html=True)
         st.markdown("""
-        🖱️ **그대로 따라 하기**
-        1. **Model** 서랍에서 **Tree**를 끌어와 File과 선으로 이어요.
-        2. **Visualize** 서랍의 **Tree Viewer**를 끌어와 Tree와 이어요.
-        3. Tree Viewer를 더블클릭 → 나무 그림 등장! 맨 위 갈림길부터 조건을 읽어 내려가요.
-        4. 읽는 법: 갈림길에 `재고율(%) > 30` 이라고 써 있으면 → "재고율이 30을 넘는 회사는 이쪽 가지로 간다"는 뜻이에요.
-        5. 우리 회사의 **최신 지표 숫자**를 들고 갈림길을 직접 따라가 보세요. 어느 잎(안전/주의/위험)에 도착하나요?
+        ⚠️ **여기서는 새 File 위젯에 `전체기업3개년` 시트를 열어요!**
+        우리 회사 12줄만으로 배우면 컴퓨터가 우연에 속아 엉뚱한 갈림길(ESG, 매출액…)을 만들어요.
+        40개 기업 × 3년 = 480줄로 배워야 진짜 규칙을 찾아냅니다.
 
-        - 나무의 **갈림길 조건** = 위기를 가르는 기준!
+        🖱️ **그대로 따라 하기**
+        1. **File 위젯을 새로 하나** 끌어다 놓고, 같은 통합 Excel을 선택 → 시트를 `전체기업3개년`으로!
+        2. **Model** 서랍에서 **Tree**를 끌어와 새 File과 선으로 이어요.
+        3. **Visualize** 서랍의 **Tree Viewer**를 끌어와 Tree와 이어요.
+        4. Tree Viewer를 더블클릭 → 나무 그림 등장! 맨 위 갈림길부터 조건을 읽어 내려가요.
+        5. 읽는 법: 갈림길에 `고객 이탈률(%) > 15` 라고 써 있으면 → "이탈률이 15를 넘는 회사는 이쪽 가지로 간다"는 뜻이에요.
+        6. 우리 회사의 **최신 분기(2025_4Q) 숫자**를 들고 갈림길을 직접 따라가 보세요. 어느 잎(안전/주의/위험)에 도착하나요?
+
+        - 나무의 **갈림길 조건** = 위기를 가르는 기준! STEP 2의 위험 신호 기준(30/15/120/70)과 비교해 보세요.
         - 🌲 **Random Forest**: 나무 여러 그루의 투표 → 더 정확해요 (대신 나무 그림은 없음)
         - 👥 **kNN**: "너랑 비슷한 회사들이 위험하면, 너도 위험!"
         """)
@@ -1027,10 +1057,10 @@ if view_mode == "📚 분석 가이드 (Orange3 사용법)":
             ("🔮", "Predictions", "새 데이터의 등급을<br>모델이 예측", "#B197FC"),
         ]), unsafe_allow_html=True)
         st.markdown("""
-        🖱️ **그대로 따라 하기**: **Evaluate** 서랍에서 **Test & Score**를 꺼낸 뒤, **File과 Tree를 둘 다** Test & Score에 이어요.
+        🖱️ **그대로 따라 하기**: **Evaluate** 서랍에서 **Test & Score**를 꺼낸 뒤, **File(전체기업3개년)과 Tree를 둘 다** Test & Score에 이어요.
         (데이터 선 1개 + 모델 선 1개 = **총 2개의 선**이 들어가야 해요!) 더블클릭하면 **CA(정확도)** 점수가 보여요. 1.0이 만점!
 
-        - CA가 낮다면? ① Tree 설정(깊이) 바꿔보기 ② 분기를 더 진행해서 데이터 모으기
+        - 480줄로 배우면 **0.9 근처**의 높은 점수가 나와요. File을 우리 회사(12줄)로 바꿔 보면? 뚝 떨어져요 → **데이터가 많을수록 컴퓨터는 똑똑해져요!**
         - Tree와 kNN을 같이 연결하면 **어떤 모델이 더 똑똑한지 대결**도 가능!
         - **Confusion Matrix**를 Test & Score 뒤에 이으면 "위험을 안전으로 착각한 횟수"까지 표로 보여요.
         """)
@@ -1231,7 +1261,7 @@ elif view_mode == "👨‍🎓 학생 화면 (대시보드)":
                             )
 
                     st.download_button(
-                        label="📊 통합 분석 파일 (Excel) - 과거데이터·월별실적·시뮬레이션결과·전체시장",
+                        label="📊 통합 분석 파일 (Excel) - 과거데이터·월별실적·시뮬레이션결과·전체시장·전체기업3개년",
                         data=build_company_excel(company, st.session_state.current_quarter),
                         file_name=f"{company}_통합분석_{display_year}Q{display_q}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
