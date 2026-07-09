@@ -1227,44 +1227,11 @@ elif view_mode == "👨‍🎓 학생 화면 (대시보드)":
     # 선택 상태가 유지되는 라디오 버튼으로 화면을 전환한다
     student_view = st.radio(
         "보기 선택",
-        ["📊 우리 조 집중 분석", "🌐 전체 시장 동향 (배경 기업 탐색)"],
+        ["📊 우리 조 집중 분석", "💰 조별 투자 성과 (주식 계좌)", "🌐 전체 시장 동향 (배경 기업 탐색)"],
         horizontal=True, key="student_view", label_visibility="collapsed"
     )
 
     if student_view == "📊 우리 조 집중 분석":
-        # 💰 조별 투자 성과: 시드머니(조당 3,000만원)로 산 주식의 총자산·손익 현황
-        _team_count = len(st.session_state.students_companies)
-        if any(get_portfolio(no)["tx"] for no in range(1, _team_count + 1)):
-            st.markdown(
-                f"<div class='sec-title'>💰 조별 투자 성과 — 시드머니 {TEAM_SEED_MONEY:,}원, 얼마나 불렸을까?</div>",
-                unsafe_allow_html=True
-            )
-            _invest = [
-                (team_no, comp, portfolio_summary(team_no))
-                for team_no, comp in enumerate(st.session_state.students_companies, start=1)
-            ]
-            _ranked = sorted(_invest, key=lambda x: x[2]["total"], reverse=True)
-            _medals = ["🥇", "🥈", "🥉", "🏅"]
-            _inv_cols = st.columns(len(_ranked))
-            for _rank, (team_no, comp, s) in enumerate(_ranked):
-                with _inv_cols[_rank]:
-                    st.metric(
-                        label=f"{_medals[_rank]} {team_no}조 총자산",
-                        value=f"{s['total']:,}원",
-                        delta=f"{s['profit']:+,}원 ({s['return_pct']:+.2f}%)"
-                    )
-            with st.expander("📂 조별 보유 종목 상세 — 어떤 주식을 얼마에 사서, 지금 얼마가 됐나?"):
-                for team_no, comp, s in _invest:
-                    st.markdown(
-                        f"**{team_no}조 · {comp}** — 💵 현금 {s['cash']:,}원 · 📦 주식 {s['stock_value']:,}원 · "
-                        f"🏦 총자산 {s['total']:,}원 ({s['return_pct']:+.2f}%)"
-                    )
-                    if s["rows"]:
-                        st.dataframe(pd.DataFrame(s["rows"]), use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("보유 종목 없음 (전액 현금)")
-            st.divider()
-
         # 조별 누적 수익률 리더보드 (시작가 대비 현재가)
         if st.session_state.current_quarter > 1:
             st.markdown("<div class='sec-title'>🏆 조별 누적 수익률 순위</div>", unsafe_allow_html=True)
@@ -1345,6 +1312,51 @@ elif view_mode == "👨‍🎓 학생 화면 (대시보드)":
                         use_container_width=True
                     )
                     
+    elif student_view == "💰 조별 투자 성과 (주식 계좌)":
+        # 시드머니(조당 300만원)로 산 주식의 총자산·손익을 보여주는 전용 탭
+        st.markdown(
+            f"<div class='sec-title'>💰 조별 투자 성과 — 시드머니 {TEAM_SEED_MONEY:,}원, 얼마나 불렸을까?</div>",
+            unsafe_allow_html=True
+        )
+        _team_count = len(st.session_state.students_companies)
+        if not any(get_portfolio(no)["tx"] for no in range(1, _team_count + 1)):
+            st.info("아직 주식 거래가 없어요. 선생님이 주문을 넣으면 이곳에 조별 계좌가 표시됩니다. (모든 조는 시드머니 전액 현금 보유 중)")
+
+        _invest = [
+            (team_no, comp, portfolio_summary(team_no))
+            for team_no, comp in enumerate(st.session_state.students_companies, start=1)
+        ]
+        _ranked = sorted(_invest, key=lambda x: x[2]["total"], reverse=True)
+        _medals = ["🥇", "🥈", "🥉", "🏅"]
+        _inv_cols = st.columns(len(_ranked))
+        for _rank, (team_no, comp, s) in enumerate(_ranked):
+            with _inv_cols[_rank]:
+                st.metric(
+                    label=f"{_medals[_rank]} {team_no}조 총자산",
+                    value=f"{s['total']:,}원",
+                    delta=f"{s['profit']:+,}원 ({s['return_pct']:+.2f}%)"
+                )
+        st.caption("총자산 = 💵 남은 현금 + 📦 보유 주식의 현재가 평가액. 분기가 진행되어 주가가 바뀌면 자동으로 다시 계산돼요.")
+        st.divider()
+
+        # 조별 계좌 상세 카드 (2열): 어떤 주식을 얼마에 사서 지금 얼마가 됐나
+        st.markdown("<div class='sec-title'>📂 조별 계좌 상세</div>", unsafe_allow_html=True)
+        _acct_cols = st.columns(2)
+        for _idx, (team_no, comp, s) in enumerate(_invest):
+            with _acct_cols[_idx % 2]:
+                with st.container(border=True):
+                    st.markdown(
+                        f"**{team_no}조 · {comp}** &nbsp;|&nbsp; 🏦 총자산 **{s['total']:,}원** "
+                        f"<span style='color:{'#2F9E44' if s['profit'] >= 0 else '#E03131'};'>"
+                        f"({s['profit']:+,}원 · {s['return_pct']:+.2f}%)</span>",
+                        unsafe_allow_html=True
+                    )
+                    st.caption(f"💵 현금 {s['cash']:,}원 · 📦 주식 평가액 {s['stock_value']:,}원")
+                    if s["rows"]:
+                        st.dataframe(pd.DataFrame(s["rows"]), use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("보유 종목 없음 (전액 현금)")
+
     else:
         st.markdown("<div class='sec-title'>🔍 거시 경제에 따른 다른 기업들의 흐름을 분석해 보세요</div>", unsafe_allow_html=True)
 
