@@ -578,13 +578,16 @@ def get_market_rows():
 # 💰 조별 주식 투자 (시드머니 · 매수/매도 · 손익 평가)
 # ==========================================
 SEED_MONEY_PER_STUDENT = 1_000_000    # 1인당 100만원
-TEAM_SIZE = 3                          # 한 조 3명
-TEAM_SEED_MONEY = SEED_MONEY_PER_STUDENT * TEAM_SIZE  # 조당 300만원
+TEAM_SIZES = {1: 3, 2: 3, 3: 3, 4: 4}  # 조별 인원 — 4조만 4명
+
+def team_seed_money(team_no):
+    """조 인원수에 따른 시드머니 (1인 100만원 × 인원 → 1~3조 300만원, 4조 400만원)"""
+    return SEED_MONEY_PER_STUDENT * TEAM_SIZES.get(int(team_no), 3)
 
 def get_portfolio(team_no):
     """조 번호의 포트폴리오를 가져오고, 처음이면 시드머니로 초기화"""
     return st.session_state.portfolios.setdefault(str(team_no), {
-        "cash": TEAM_SEED_MONEY, "holdings": {}, "tx": []
+        "cash": team_seed_money(team_no), "holdings": {}, "tx": []
     })
 
 def portfolio_summary(team_no):
@@ -606,10 +609,11 @@ def portfolio_summary(team_no):
             "수익률(%)": round((cur - h["avg_price"]) / h["avg_price"] * 100, 2) if h["avg_price"] > 0 else 0.0,
         })
     total = pf["cash"] + stock_value
-    profit = total - TEAM_SEED_MONEY
+    seed = team_seed_money(team_no)
+    profit = total - seed
     return {
         "cash": pf["cash"], "stock_value": round(stock_value), "total": round(total),
-        "profit": round(profit), "return_pct": profit / TEAM_SEED_MONEY * 100,
+        "seed": seed, "profit": round(profit), "return_pct": profit / seed * 100,
         "rows": rows,
     }
 
@@ -1315,7 +1319,7 @@ elif view_mode == "👨‍🎓 학생 화면 (대시보드)":
     elif student_view == "💰 조별 투자 성과 (주식 계좌)":
         # 시드머니(조당 300만원)로 산 주식의 총자산·손익을 보여주는 전용 탭
         st.markdown(
-            f"<div class='sec-title'>💰 조별 투자 성과 — 시드머니 {TEAM_SEED_MONEY:,}원, 얼마나 불렸을까?</div>",
+            f"<div class='sec-title'>💰 조별 투자 성과 — 시드머니(1~3조 {SEED_MONEY_PER_STUDENT * 3:,}원 · 4조 {SEED_MONEY_PER_STUDENT * 4:,}원), 얼마나 불렸을까?</div>",
             unsafe_allow_html=True
         )
         _team_count = len(st.session_state.students_companies)
@@ -1326,7 +1330,8 @@ elif view_mode == "👨‍🎓 학생 화면 (대시보드)":
             (team_no, comp, portfolio_summary(team_no))
             for team_no, comp in enumerate(st.session_state.students_companies, start=1)
         ]
-        _ranked = sorted(_invest, key=lambda x: x[2]["total"], reverse=True)
+        # 조별 인원(시드머니)이 달라 총자산 절대액은 불공정 → 수익률로 순위를 매긴다
+        _ranked = sorted(_invest, key=lambda x: x[2]["return_pct"], reverse=True)
         _medals = ["🥇", "🥈", "🥉", "🏅"]
         _inv_cols = st.columns(len(_ranked))
         for _rank, (team_no, comp, s) in enumerate(_ranked):
@@ -1502,7 +1507,7 @@ elif view_mode == "⚙️ 교사 화면 (전략 적용)":
     # ==========================================
     if teacher_view == "💰 주식 거래 (시드머니)":
         st.markdown(
-            f"<div class='sec-title'>💰 조별 주식 거래 — 시드머니 조당 {TEAM_SEED_MONEY:,}원 (1인 {SEED_MONEY_PER_STUDENT:,}원 × {TEAM_SIZE}명)</div>",
+            f"<div class='sec-title'>💰 조별 주식 거래 — 시드머니 1인 {SEED_MONEY_PER_STUDENT:,}원 × 조 인원 (1~3조 {SEED_MONEY_PER_STUDENT * 3:,}원 · 4조 {SEED_MONEY_PER_STUDENT * 4:,}원)</div>",
             unsafe_allow_html=True
         )
         if "trade_msg" in st.session_state:
