@@ -577,9 +577,9 @@ def get_market_rows():
 # ==========================================
 # 💰 조별 주식 투자 (시드머니 · 매수/매도 · 손익 평가)
 # ==========================================
-SEED_MONEY_PER_STUDENT = 10_000_000   # 1인당 1,000만원
+SEED_MONEY_PER_STUDENT = 1_000_000    # 1인당 100만원
 TEAM_SIZE = 3                          # 한 조 3명
-TEAM_SEED_MONEY = SEED_MONEY_PER_STUDENT * TEAM_SIZE  # 조당 3,000만원
+TEAM_SEED_MONEY = SEED_MONEY_PER_STUDENT * TEAM_SIZE  # 조당 300만원
 
 def get_portfolio(team_no):
     """조 번호의 포트폴리오를 가져오고, 처음이면 시드머니로 초기화"""
@@ -1443,28 +1443,6 @@ elif view_mode == "⚙️ 교사 화면 (전략 적용)":
     </div>
     """, unsafe_allow_html=True)
 
-    if st.session_state.quarter_records:
-        with st.expander(f"📜 지난 분기 평가 기록 보기 (총 {len(st.session_state.quarter_records)}개 분기 진행됨)"):
-            hist_rows = []
-            for rec in st.session_state.quarter_records:
-                for comp, r in rec["results"].items():
-                    hist_rows.append({
-                        "분기": rec["label"],
-                        "시장 이슈": rec["issue"],
-                        "기업": comp,
-                        "AI 배수": r["multiplier"],
-                        "제출 전략": r["strategy"],
-                        "AI 코멘트": r["reason"],
-                    })
-            hist_df = pd.DataFrame(hist_rows)
-            st.dataframe(hist_df, use_container_width=True, hide_index=True)
-            st.download_button(
-                "📥 평가 기록 CSV 다운로드 (수업 기록 보관용)",
-                hist_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="분기별_전략평가기록.csv", mime="text/csv",
-                key=f"dl_records_{st.session_state.current_quarter}"
-            )
-
     # 클라우드 배포 시 서버 재시작으로 진행 상태가 사라질 수 있으므로 백업/복원 수단을 제공
     with st.expander("☁️ 진행 상태 백업/복원 (클라우드 배포 시 필수)"):
         st.caption(
@@ -1497,96 +1475,145 @@ elif view_mode == "⚙️ 교사 화면 (전략 적용)":
                         st.session_state.teacher_auth = True  # 복원 직후 PIN 재입력 없이 이어서 진행
                         st.rerun()
 
-    # ------------------------------------------
-    # 💰 조별 주식 거래 (교사 조작 · 시드머니 1인 1,000만원 × 3명)
-    # ------------------------------------------
-    st.markdown(
-        f"<div class='sec-title'>💰 조별 주식 거래 — 시드머니 조당 {TEAM_SEED_MONEY:,}원 (1인 {SEED_MONEY_PER_STUDENT:,}원 × {TEAM_SIZE}명)</div>",
-        unsafe_allow_html=True
-    )
-    if "trade_msg" in st.session_state:
-        st.success(st.session_state.pop("trade_msg"))
-
-    team_labels = [f"{no}조 · {comp}" for no, comp in enumerate(st.session_state.students_companies, start=1)]
-    trade_c1, trade_c2, trade_c3 = st.columns([2, 3, 2])
-    with trade_c1:
-        team_pick = st.selectbox("거래할 조", team_labels, key="trade_team")
-    team_no = team_labels.index(team_pick) + 1
-    with trade_c2:
-        comp_options = [f"{c}  ·  {st.session_state.price_history[c][-1]:,}원" for c in company_pool]
-        comp_pick = st.selectbox("종목 (현재가)", comp_options, key="trade_comp")
-    comp_name = comp_pick.split("  ·  ")[0]
-    cur_price = st.session_state.price_history[comp_name][-1]
-    with trade_c3:
-        trade_qty = st.number_input("수량 (주)", min_value=1, value=10, step=1, key="trade_qty")
-
-    trade_amount = cur_price * trade_qty
-    _pf = get_portfolio(team_no)
-    _own_shares = _pf["holdings"].get(comp_name, {}).get("shares", 0)
-    st.caption(
-        f"주문 금액 **{trade_amount:,}원** · {team_no}조 보유 현금 **{_pf['cash']:,}원** · "
-        f"{comp_name} 보유 **{_own_shares:,}주**"
-    )
-
-    buy_col, sell_col = st.columns(2)
-    with buy_col:
-        if st.button(f"🛒 매수 — {trade_amount:,}원", use_container_width=True, type="primary", key="btn_buy"):
-            if trade_amount > _pf["cash"]:
-                st.error(f"현금이 부족합니다! (부족액 {trade_amount - _pf['cash']:,}원)")
-            else:
-                h = _pf["holdings"].setdefault(comp_name, {"shares": 0, "avg_price": 0.0})
-                h["avg_price"] = (h["shares"] * h["avg_price"] + trade_qty * cur_price) / (h["shares"] + trade_qty)
-                h["shares"] += trade_qty
-                _pf["cash"] -= trade_amount
-                _pf["tx"].append({
-                    "시점": f"{display_year}년 {display_q}분기", "조": f"{team_no}조", "구분": "매수",
-                    "종목": comp_name, "수량": trade_qty, "단가(원)": cur_price, "금액(원)": trade_amount, "실현손익(원)": "",
-                })
-                save_current_state_to_file()
-                st.session_state.trade_msg = f"✅ {team_no}조가 {comp_name} {trade_qty:,}주를 {trade_amount:,}원에 매수했습니다."
-                st.rerun()
-    with sell_col:
-        if st.button(f"💸 매도 — {trade_amount:,}원", use_container_width=True, key="btn_sell"):
-            if trade_qty > _own_shares:
-                st.error(f"보유 수량이 부족합니다! ({comp_name} 보유 {_own_shares:,}주)")
-            else:
-                h = _pf["holdings"][comp_name]
-                realized = round((cur_price - h["avg_price"]) * trade_qty)
-                h["shares"] -= trade_qty
-                if h["shares"] == 0:
-                    del _pf["holdings"][comp_name]
-                _pf["cash"] += trade_amount
-                _pf["tx"].append({
-                    "시점": f"{display_year}년 {display_q}분기", "조": f"{team_no}조", "구분": "매도",
-                    "종목": comp_name, "수량": trade_qty, "단가(원)": cur_price, "금액(원)": trade_amount, "실현손익(원)": realized,
-                })
-                save_current_state_to_file()
-                st.session_state.trade_msg = (
-                    f"✅ {team_no}조가 {comp_name} {trade_qty:,}주를 매도했습니다. (실현손익 {realized:+,}원)"
-                )
-                st.rerun()
-
-    # 선택한 조의 현재 자산 현황 (거래 직후 최신 값)
-    _s = portfolio_summary(team_no)
-    pm1, pm2, pm3, pm4 = st.columns(4)
-    pm1.metric("💵 보유 현금", f"{_s['cash']:,}원")
-    pm2.metric("📦 주식 평가액", f"{_s['stock_value']:,}원")
-    pm3.metric("🏦 총자산", f"{_s['total']:,}원")
-    pm4.metric("📈 투자 수익률", f"{_s['return_pct']:+.2f}%")
-
-    _all_tx = [t for no in range(1, len(st.session_state.students_companies) + 1) for t in get_portfolio(no)["tx"]]
-    if _all_tx:
-        with st.expander(f"🧾 전체 거래 내역 ({len(_all_tx)}건)"):
-            tx_df = pd.DataFrame(_all_tx)
-            st.dataframe(tx_df, use_container_width=True, hide_index=True)
-            st.download_button(
-                "📥 거래 내역 CSV 다운로드", tx_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="조별_주식거래내역.csv", mime="text/csv",
-                key=f"dl_tx_{len(_all_tx)}"
-            )
-
     st.divider()
 
+    # 교사 기능을 두 개의 작업 공간으로 분리 (마케팅 평가 ↔ 주식 거래 혼동 방지)
+    # st.tabs는 rerun마다 첫 탭으로 튕기므로, 선택이 유지되는 라디오로 전환한다
+    teacher_view = st.radio(
+        "작업 선택",
+        ["📝 마케팅 전략 평가 (분기 진행)", "💰 주식 거래 (시드머니)"],
+        horizontal=True, key="teacher_view", label_visibility="collapsed"
+    )
+
+    # ==========================================
+    # [교사 탭 1] 💰 주식 거래 — 이 탭을 그리면 아래 마케팅 화면은 건너뛴다(st.stop)
+    # ==========================================
+    if teacher_view == "💰 주식 거래 (시드머니)":
+        st.markdown(
+            f"<div class='sec-title'>💰 조별 주식 거래 — 시드머니 조당 {TEAM_SEED_MONEY:,}원 (1인 {SEED_MONEY_PER_STUDENT:,}원 × {TEAM_SIZE}명)</div>",
+            unsafe_allow_html=True
+        )
+        if "trade_msg" in st.session_state:
+            st.success(st.session_state.pop("trade_msg"))
+
+        team_labels = [f"{no}조 · {comp}" for no, comp in enumerate(st.session_state.students_companies, start=1)]
+        trade_c1, trade_c2, trade_c3 = st.columns([2, 3, 2])
+        with trade_c1:
+            team_pick = st.selectbox("거래할 조", team_labels, key="trade_team")
+        team_no = team_labels.index(team_pick) + 1
+        with trade_c2:
+            comp_options = [f"{c}  ·  {st.session_state.price_history[c][-1]:,}원" for c in company_pool]
+            comp_pick = st.selectbox("종목 (현재가)", comp_options, key="trade_comp")
+        comp_name = comp_pick.split("  ·  ")[0]
+        cur_price = st.session_state.price_history[comp_name][-1]
+        with trade_c3:
+            trade_qty = st.number_input("수량 (주)", min_value=1, value=10, step=1, key="trade_qty")
+
+        trade_amount = cur_price * trade_qty
+        _pf = get_portfolio(team_no)
+        _own_shares = _pf["holdings"].get(comp_name, {}).get("shares", 0)
+        st.caption(
+            f"주문 금액 **{trade_amount:,}원** · {team_no}조 보유 현금 **{_pf['cash']:,}원** · "
+            f"{comp_name} 보유 **{_own_shares:,}주**"
+        )
+
+        buy_col, sell_col = st.columns(2)
+        with buy_col:
+            if st.button(f"🛒 매수 — {trade_amount:,}원", use_container_width=True, type="primary", key="btn_buy"):
+                if trade_amount > _pf["cash"]:
+                    st.error(f"현금이 부족합니다! (부족액 {trade_amount - _pf['cash']:,}원)")
+                else:
+                    h = _pf["holdings"].setdefault(comp_name, {"shares": 0, "avg_price": 0.0})
+                    h["avg_price"] = (h["shares"] * h["avg_price"] + trade_qty * cur_price) / (h["shares"] + trade_qty)
+                    h["shares"] += trade_qty
+                    _pf["cash"] -= trade_amount
+                    _pf["tx"].append({
+                        "시점": f"{display_year}년 {display_q}분기", "조": f"{team_no}조", "구분": "매수",
+                        "종목": comp_name, "수량": trade_qty, "단가(원)": cur_price, "금액(원)": trade_amount, "실현손익(원)": "",
+                    })
+                    save_current_state_to_file()
+                    st.session_state.trade_msg = f"✅ {team_no}조가 {comp_name} {trade_qty:,}주를 {trade_amount:,}원에 매수했습니다."
+                    st.rerun()
+        with sell_col:
+            if st.button(f"💸 매도 — {trade_amount:,}원", use_container_width=True, key="btn_sell"):
+                if trade_qty > _own_shares:
+                    st.error(f"보유 수량이 부족합니다! ({comp_name} 보유 {_own_shares:,}주)")
+                else:
+                    h = _pf["holdings"][comp_name]
+                    realized = round((cur_price - h["avg_price"]) * trade_qty)
+                    h["shares"] -= trade_qty
+                    if h["shares"] == 0:
+                        del _pf["holdings"][comp_name]
+                    _pf["cash"] += trade_amount
+                    _pf["tx"].append({
+                        "시점": f"{display_year}년 {display_q}분기", "조": f"{team_no}조", "구분": "매도",
+                        "종목": comp_name, "수량": trade_qty, "단가(원)": cur_price, "금액(원)": trade_amount, "실현손익(원)": realized,
+                    })
+                    save_current_state_to_file()
+                    st.session_state.trade_msg = (
+                        f"✅ {team_no}조가 {comp_name} {trade_qty:,}주를 매도했습니다. (실현손익 {realized:+,}원)"
+                    )
+                    st.rerun()
+
+        # 📂 조별 포트폴리오 현황: 4개 조가 각각 무엇을 몇 주 들고 있는지 한눈에
+        st.markdown("<div class='sec-title'>📂 조별 포트폴리오 현황</div>", unsafe_allow_html=True)
+        pf_cols = st.columns(2)
+        for idx, comp in enumerate(st.session_state.students_companies):
+            no = idx + 1
+            s = portfolio_summary(no)
+            total_shares = sum(r["보유 수량"] for r in s["rows"])
+            with pf_cols[idx % 2]:
+                with st.container(border=True):
+                    st.markdown(
+                        f"**{no}조 · {comp}** &nbsp;|&nbsp; 🏦 총자산 **{s['total']:,}원** "
+                        f"<span style='color:{'#2F9E44' if s['profit'] >= 0 else '#E03131'};'>"
+                        f"({s['profit']:+,}원 · {s['return_pct']:+.2f}%)</span>",
+                        unsafe_allow_html=True
+                    )
+                    st.caption(f"보유 {len(s['rows'])}종목 · 총 {total_shares:,}주 · 💵 현금 {s['cash']:,}원 · 📦 주식 {s['stock_value']:,}원")
+                    if s["rows"]:
+                        st.dataframe(pd.DataFrame(s["rows"]), use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("아직 산 주식이 없어요 (전액 현금)")
+
+        _all_tx = [t for no in range(1, len(st.session_state.students_companies) + 1) for t in get_portfolio(no)["tx"]]
+        if _all_tx:
+            with st.expander(f"🧾 전체 거래 내역 ({len(_all_tx)}건)"):
+                tx_df = pd.DataFrame(_all_tx)
+                st.dataframe(tx_df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "📥 거래 내역 CSV 다운로드", tx_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="조별_주식거래내역.csv", mime="text/csv",
+                    key=f"dl_tx_{len(_all_tx)}"
+                )
+        st.stop()  # 주식 거래 탭에서는 아래 마케팅 평가 화면을 그리지 않음
+
+    # ==========================================
+    # [교사 탭 2] 📝 마케팅 전략 평가 (분기 진행)
+    # ==========================================
+    if st.session_state.quarter_records:
+        with st.expander(f"📜 지난 분기 평가 기록 보기 (총 {len(st.session_state.quarter_records)}개 분기 진행됨)"):
+            hist_rows = []
+            for rec in st.session_state.quarter_records:
+                for comp, r in rec["results"].items():
+                    hist_rows.append({
+                        "분기": rec["label"],
+                        "시장 이슈": rec["issue"],
+                        "기업": comp,
+                        "AI 배수": r["multiplier"],
+                        "제출 전략": r["strategy"],
+                        "AI 코멘트": r["reason"],
+                    })
+            hist_df = pd.DataFrame(hist_rows)
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "📥 평가 기록 CSV 다운로드 (수업 기록 보관용)",
+                hist_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="분기별_전략평가기록.csv", mime="text/csv",
+                key=f"dl_records_{st.session_state.current_quarter}"
+            )
+
+    st.markdown("<div class='sec-title'>📝 조별 마케팅 기획안 입력</div>", unsafe_allow_html=True)
     strategies = {}
     for company in st.session_state.students_companies:
         strategies[company] = st.text_area(f"📝 {company} 마케팅 기획안", placeholder="조별로 제출한 마케팅 전략을 입력하세요...", height=100)
